@@ -1,3 +1,4 @@
+# lib/config.ex - Add caching configuration
 defmodule Carve.Config do
   @moduledoc """
   Handles configuration for Carve.
@@ -16,5 +17,12 @@ defmodule Carve.Config do
   def get(key, default \\ nil) do
     get()
     |> Keyword.get(key, default)
+  end
+
+  @doc """
+  Checks if caching is enabled. Defaults to true.
+  """
+  def caching_enabled? do
+    get(:enable_cache, true)
   end
 end

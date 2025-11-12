@@ -254,7 +254,7 @@ defmodule Carve.LinksTest do
   test "get_links_by_id handles a list of IDs" do
     links = Links.get_links_by_id(TagJSON, [2002, 2003, 2004], %{}, [:post])
 
-    IO.inspect links, label: "links"
+    #IO.inspect links, label: "links"
 
     assert length(links) == 4
     assert Enum.all?(links, &(&1.type == :post))
@@ -268,7 +268,7 @@ defmodule Carve.LinksTest do
 
     links = Links.get_links_by_data(PostJSON, post_data_list, %{},[:user, :comment, :tag])
 
-    IO.inspect links
+    #IO.inspect links
 
     # (1 user + 2 comments + 2 tags) * 2 posts - 1 duplicate user
     assert length(links) == 9

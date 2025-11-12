@@ -340,6 +340,45 @@ links fn user ->
 end
 ```
 
+## Preload support
+
+Return preloaded association in your views, falling back to id using `data_or_id` macro:
+
+```elixir
+ links fn image ->
+    %{
+      UserJSON => data_or_id(image.user, image.user_id),
+    }
+  end
+```
+
+Example controller:
+
+```elixir
+def index(conn, params) do
+    assets =
+      MyApp.Assets.Asset
+      |> MyApp.Assets.scope_to_user(conn.assigns.current_user.id)
+      |> MyApp.Assets.scope_active()
+      |> MyApp.Repo.all()
+      |> MyApp.Repo.preload([:current_version, user: :subscription])
+
+    render(conn, :index, %{result: assets, include: Carve.parse_include(params)})
+  end
+```
+
+## Caching
+
+Carve includes request-scoped caching enabled by default, using [cachex](https://github.com/whitfin/cachex) under the hood. Each linked resource is stored in the cache for 100ms by default.
+
+To disable caching:
+
+```
+```elixir
+config :carve, Carve.Config,
+  enable_cache: false
+```
+
 ## How does it work?
 
 * Carve macros create view functions `index(%{ result: users })` and `show(%{ result: user })`
@@ -394,4 +433,3 @@ Carve
 - Automatic batching of related data queries
 - Resource-level authorization using your existing Phoenix plugs
 - Zero additional infrastructure required
-

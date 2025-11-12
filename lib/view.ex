@@ -108,91 +108,95 @@ defmodule Carve.View do
     has_declare_links = Module.defines?(env.module, {:declare_links, 1})
 
     quote do
-      def index(%{result: data, include: include}) when is_list(data) do
-        results = Enum.map(data, &prepare_for_view/1)
+      # Wrapper for show that manages cache context
+      def show(assigns) do
+        cache_key = Carve.Cache.get_or_create_context()
 
-        links =
-          if unquote(has_declare_links) do
-            Carve.Links.get_links_by_data(__MODULE__, data, %{}, include)
-          else
-            []
-          end
-
-        %{
-          result: results,
-          links: links
-        }
+        try do
+          do_show(assigns, cache_key)
+        after
+          Carve.Cache.clear_context()
+        end
       end
 
-      # Without include - include everything
-      def index(%{result: data}) when is_list(data) do
-        results = Enum.map(data, &prepare_for_view/1)
+      # Wrapper for index that manages cache context
+      def index(assigns) do
+        cache_key = Carve.Cache.get_or_create_context()
 
-        links =
-          if unquote(has_declare_links) do
-            # Pass nil to include all
-            Carve.Links.get_links_by_data(__MODULE__, data, %{}, nil)
-          else
-            []
-          end
-
-        %{
-          result: results,
-          links: links
-        }
+        try do
+          do_index(assigns, cache_key)
+        after
+          Carve.Cache.clear_context()
+        end
       end
 
-      # With include parameter - use whitelist
-      def show(%{result: data, include: include}) do
+      # Internal show implementation
+      defp do_show(%{result: data, include: include}, cache_key) do
         result = prepare_for_view(data)
 
         links =
           if unquote(has_declare_links) do
-            Carve.Links.get_links_by_data(__MODULE__, data, %{}, include)
+            Carve.Links.get_links_by_data(__MODULE__, data, %{}, include, cache_key)
           else
             []
           end
 
-        %{
-          result: result,
-          links: links
-        }
+        %{result: result, links: links}
       end
 
-      # Without include - include everything
-      def show(%{result: data}) do
+      defp do_show(%{result: data}, cache_key) do
         result = prepare_for_view(data)
 
         links =
           if unquote(has_declare_links) do
-            # Pass nil to include all
-            Carve.Links.get_links_by_data(__MODULE__, data, %{}, nil)
+            Carve.Links.get_links_by_data(__MODULE__, data, %{}, nil, cache_key)
           else
             []
           end
 
-        %{
-          result: result,
-          links: links
-        }
+        %{result: result, links: links}
       end
 
-      # Hash an integer ID
+      # Internal index implementation
+      defp do_index(%{result: data, include: include}, cache_key) when is_list(data) do
+        results = Enum.map(data, &prepare_for_view/1)
+
+        links =
+          if unquote(has_declare_links) do
+            Carve.Links.get_links_by_data(__MODULE__, data, %{}, include, cache_key)
+          else
+            []
+          end
+
+        %{result: results, links: links}
+      end
+
+      defp do_index(%{result: data}, cache_key) when is_list(data) do
+        results = Enum.map(data, &prepare_for_view/1)
+
+        links =
+          if unquote(has_declare_links) do
+            Carve.Links.get_links_by_data(__MODULE__, data, %{}, nil, cache_key)
+          else
+            []
+          end
+
+        %{result: results, links: links}
+      end
+
+      # Keep all other generated functions the same
       def hash(id) when is_integer(id) do
         Carve.HashIds.encode(@carve_type, id)
       end
 
-      # Hash an entity with an ID
       def hash(%{id: id}) do
         hash(id)
       end
 
-      # Hash an integer ID
       def encode_id(id) when is_integer(id) do
         Carve.HashIds.encode(@carve_type, id)
       end
 
-      # Decode a hashed ID
       def decode_id(hashed_id) when is_binary(hashed_id) do
         case Carve.HashIds.decode(@carve_type, hashed_id) do
           {:ok, id} -> {:ok, id}
@@ -201,16 +205,14 @@ defmodule Carve.View do
       end
 
       def decode_id!(hashed_id) when is_binary(hashed_id) do
-	case decode_id(hashed_id) do
-	  {:ok, id} -> id
-	  {:error, reason} -> raise "Failed to decode ID: #{reason}"
-	end
+        case decode_id(hashed_id) do
+          {:ok, id} -> id
+          {:error, reason} -> raise "Failed to decode ID: #{reason}"
+        end
       end
 
-      # Return the type of this view
       def type_name, do: @carve_type
 
-      # Default declare_links function if not defined by user
       unless unquote(has_declare_links) do
         def declare_links(_), do: %{}
       end
@@ -295,6 +297,18 @@ defmodule Carve.View do
     quote do
       def get_by_id(id) do
         unquote(func).(id)
+      end
+    end
+  end
+
+  @doc """
+  Generates a runtime `case` statement to return a loaded Ecto association or fall back to its ID.
+  """
+  defmacro data_or_id(association, id) do
+    quote do
+      case unquote(association) do
+        %Ecto.Association.NotLoaded{} -> unquote(id)
+        loaded -> loaded
       end
     end
   end

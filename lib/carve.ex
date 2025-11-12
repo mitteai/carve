@@ -25,8 +25,17 @@ defmodule Carve do
   """
   def start(_type, _args) do
     Logger.info("Starting Carve")
+
+    # Start Cachex for request-scoped caching
+    children = [
+      {Cachex, name: :carve_cache}
+    ]
+
+    opts = [strategy: :one_for_one, name: Carve.Supervisor]
+    result = Supervisor.start_link(children, opts)
+
     configure(Carve.Config.get())
-    {:ok, self()}
+    result
   end
 
   @doc """
@@ -85,12 +94,16 @@ defmodule Carve do
     cond do
       is_integer(data_or_ids) ->
         Carve.Links.get_links_by_id(module, data_or_ids)
+
       is_list(data_or_ids) and Enum.all?(data_or_ids, &is_integer/1) ->
         Carve.Links.get_links_by_id(module, data_or_ids)
+
       is_map(data_or_ids) ->
         Carve.Links.get_links_by_data(module, data_or_ids)
+
       is_list(data_or_ids) and Enum.all?(data_or_ids, &is_map/1) ->
         Carve.Links.get_links_by_data(module, data_or_ids)
+
       true ->
         []
     end
@@ -192,14 +205,18 @@ defmodule Carve do
   def parse_include(params) do
     if include_param_specified?(params) do
       case params["include"] do
-        nil -> nil
-        "" -> []
+        nil ->
+          nil
+
+        "" ->
+          []
+
         string when is_binary(string) ->
           string
           |> String.split(",", trim: true)
           |> Enum.map(&String.trim/1)
           |> Enum.reject(&(&1 == ""))
-	  |> Enum.uniq()
+          |> Enum.uniq()
           |> Enum.map(&String.to_existing_atom/1)
       end
     else
