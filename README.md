@@ -369,15 +369,50 @@ def index(conn, params) do
 
 ## Caching
 
-Carve includes request-scoped caching enabled by default, using [cachex](https://github.com/whitfin/cachex) under the hood. Each linked resource is stored in the cache for 100ms by default.
+### Request-scoped cache
 
-To disable caching:
+Carve caches linked resource lookups within a single request using [cachex](https://github.com/whitfin/cachex). TTL is 100ms by default.
 
-```
+To disable:
+
 ```elixir
 config :carve, Carve.Config,
   enable_cache: false
 ```
+
+### Shared computation between links and view
+
+When `links` and `view` both need the same expensive data, use `cache` to compute it once:
+
+```elixir
+defmodule UserJSON do
+  use Carve.View, :user
+
+  get fn id -> Users.get!(id) end
+
+  cache fn user ->
+    %{
+      plan: Plans.get_active_plan(user.id),
+      team_plan: Plans.get_team_plan(user.id)
+    }
+  end
+
+  links fn user, cached ->
+    %{PlanJSON => cached.plan.id}
+  end
+
+  view fn user, cached ->
+    %{
+      id: hash(user.id),
+      plan_id: PlanJSON.hash(cached.plan.id)
+    }
+  end
+end
+```
+
+The `cache` function runs once per entity per request. If the same user is linked from multiple parents (e.g. 10 asset versions by the same user), it still runs only once.
+
+Modules without `cache` are unaffected — single-argument `links` and `view` work as before.
 
 ## How does it work?
 

@@ -52,8 +52,10 @@ defmodule Carve.Links do
         else
           visited = Map.put(visited, {module, id}, true)
 
+          cached = fetch_cached(module, data, id, cache_key)
+
           links =
-            module.declare_links(data)
+            module.declare_links(data, cached)
             |> filter_and_evaluate_links(whitelist)
 
           links =
@@ -87,6 +89,13 @@ defmodule Carve.Links do
     end
   end
 
+  # Fetch cached data for a module, using the Cachex cache
+  defp fetch_cached(module, data, id, cache_key) do
+    Carve.Cache.fetch(cache_key, {module, :cache, id}, fn ->
+      module.__cache__(data)
+    end)
+  end
+
   # Update process_single_link to use cache
   defp process_single_link(module, id, visited, cache_key) when is_number(id) or is_binary(id) do
     case Map.get(visited, {module, id}) do
@@ -97,7 +106,9 @@ defmodule Carve.Links do
 
         case data do
           nil -> nil
-          data -> module.prepare_for_view(data)
+          data ->
+            cached = fetch_cached(module, data, id, cache_key)
+            module.prepare_for_view(data, cached)
         end
 
       _ ->
@@ -105,12 +116,16 @@ defmodule Carve.Links do
     end
   end
 
-  defp process_single_link(module, data, visited, _cache_key) do
+  defp process_single_link(module, data, visited, cache_key) do
     case fetch_id(data) do
       {:ok, id} ->
         case Map.get(visited, {module, id}) do
-          nil -> module.prepare_for_view(data)
-          _ -> nil
+          nil ->
+            cached = fetch_cached(module, data, id, cache_key)
+            module.prepare_for_view(data, cached)
+
+          _ ->
+            nil
         end
 
       :error ->

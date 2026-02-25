@@ -36,6 +36,36 @@ defmodule Carve.View do
   This will automatically create `show/1` and `index/1` functions that can be used
   in your Phoenix controllers, handling both data rendering and link generation.
 
+  ## Caching Expensive Computations
+
+  When both `links` and `view` need the same expensive data, use the `cache` macro
+  to compute it once and pass it to both:
+
+      defmodule MyApp.UserJSON do
+        use Carve.View, :user
+
+        get fn id -> MyApp.Users.get!(id) end
+
+        cache fn user ->
+          %{plan: MyApp.Plans.get_active_plan(user.id)}
+        end
+
+        links fn user, cached ->
+          %{MyApp.PlanJSON => cached.plan.id}
+        end
+
+        view fn user, cached ->
+          %{
+            id: hash(user.id),
+            plan_id: MyApp.PlanJSON.hash(cached.plan.id)
+          }
+        end
+      end
+
+  The cached result is also shared across entities within the same request,
+  so if the same user is linked from multiple parents, the cache function
+  runs only once.
+
   ## Generated Functions
 
   The `use Carve.View, :type` macro generates several functions at compile time:
@@ -105,7 +135,54 @@ defmodule Carve.View do
 
   @doc false
   defmacro __before_compile__(env) do
-    has_declare_links = Module.defines?(env.module, {:declare_links, 1})
+    has_declare_links =
+      Module.defines?(env.module, {:declare_links, 1}) ||
+        Module.defines?(env.module, {:declare_links, 2})
+
+    has_cache = Module.defines?(env.module, {:__cache__, 1})
+    has_2arity_view = Module.defines?(env.module, {:prepare_for_view, 2})
+    has_2arity_links = Module.defines?(env.module, {:declare_links, 2})
+    has_1arity_links = Module.defines?(env.module, {:declare_links, 1})
+
+    # Generate fallback for __cache__ if not defined
+    cache_fallback =
+      unless has_cache do
+        quote do
+          def __cache__(_data), do: %{}
+        end
+      end
+
+    # Generate 2-arity fallback for prepare_for_view
+    view_fallback =
+      unless has_2arity_view do
+        quote do
+          def prepare_for_view(data, _cached), do: prepare_for_view(data)
+        end
+      end
+
+    # Generate 2-arity fallback for declare_links
+    links_fallback =
+      cond do
+        has_2arity_links ->
+          nil
+
+        has_1arity_links ->
+          quote do
+            def declare_links(data, _cached), do: declare_links(data)
+          end
+
+        true ->
+          nil
+      end
+
+    # Default declare_links if no links macro was used
+    declare_links_default =
+      unless has_declare_links do
+        quote do
+          def declare_links(_), do: %{}
+          def declare_links(_, _), do: %{}
+        end
+      end
 
     quote do
       # Wrapper for show that manages cache context
@@ -132,7 +209,12 @@ defmodule Carve.View do
 
       # Internal show implementation
       defp do_show(%{result: data, include: include}, cache_key) do
-        result = prepare_for_view(data)
+        cached =
+          Carve.Cache.fetch(cache_key, {__MODULE__, :cache, data.id}, fn ->
+            __cache__(data)
+          end)
+
+        result = prepare_for_view(data, cached)
 
         links =
           if unquote(has_declare_links) do
@@ -145,7 +227,12 @@ defmodule Carve.View do
       end
 
       defp do_show(%{result: data}, cache_key) do
-        result = prepare_for_view(data)
+        cached =
+          Carve.Cache.fetch(cache_key, {__MODULE__, :cache, data.id}, fn ->
+            __cache__(data)
+          end)
+
+        result = prepare_for_view(data, cached)
 
         links =
           if unquote(has_declare_links) do
@@ -159,7 +246,15 @@ defmodule Carve.View do
 
       # Internal index implementation
       defp do_index(%{result: data, include: include}, cache_key) when is_list(data) do
-        results = Enum.map(data, &prepare_for_view/1)
+        results =
+          Enum.map(data, fn item ->
+            cached =
+              Carve.Cache.fetch(cache_key, {__MODULE__, :cache, item.id}, fn ->
+                __cache__(item)
+              end)
+
+            prepare_for_view(item, cached)
+          end)
 
         links =
           if unquote(has_declare_links) do
@@ -172,7 +267,15 @@ defmodule Carve.View do
       end
 
       defp do_index(%{result: data}, cache_key) when is_list(data) do
-        results = Enum.map(data, &prepare_for_view/1)
+        results =
+          Enum.map(data, fn item ->
+            cached =
+              Carve.Cache.fetch(cache_key, {__MODULE__, :cache, item.id}, fn ->
+                __cache__(item)
+              end)
+
+            prepare_for_view(item, cached)
+          end)
 
         links =
           if unquote(has_declare_links) do
@@ -213,8 +316,41 @@ defmodule Carve.View do
 
       def type_name, do: @carve_type
 
-      unless unquote(has_declare_links) do
-        def declare_links(_), do: %{}
+      unquote(cache_fallback)
+      unquote(view_fallback)
+      unquote(links_fallback)
+      unquote(declare_links_default)
+    end
+  end
+
+  @doc """
+  Caches expensive computations that are shared between `links` and `view`.
+
+  The function receives the entity data and should return a map of precomputed values.
+  This map is then passed as the second argument to `links` and `view` functions.
+  Results are cached per entity (by module + id) within a single request.
+
+  ## Example
+
+      cache fn user ->
+        %{
+          plan: Plans.get_active_user_plan(user.id),
+          team: Teams.get_team(user.team_id)
+        }
+      end
+
+      links fn user, cached ->
+        %{PlanJSON => cached.plan.id}
+      end
+
+      view fn user, cached ->
+        %{id: hash(user.id), plan_id: PlanJSON.hash(cached.plan.id)}
+      end
+  """
+  defmacro cache(func) do
+    quote do
+      def __cache__(data) do
+        unquote(func).(data)
       end
     end
   end
@@ -223,10 +359,12 @@ defmodule Carve.View do
   Defines the links for the current view.
 
   This macro allows you to specify how to generate links for the current entity.
+  Accepts a 1-arity function, or a 2-arity function when used with `cache`.
 
   ## Parameters
 
-  - `func`: A function that takes the entity data and returns a map of links.
+  - `func`: A function that takes the entity data (and optionally cached data)
+    and returns a map of links.
 
   ## Example
 
@@ -238,10 +376,20 @@ defmodule Carve.View do
       end
   """
   defmacro links(func) do
-    quote do
-      def declare_links(data) do
-        unquote(func).(data)
-      end
+    case detect_fn_arity(func) do
+      2 ->
+        quote do
+          def declare_links(data, cached) do
+            unquote(func).(data, cached)
+          end
+        end
+
+      _ ->
+        quote do
+          def declare_links(data) do
+            unquote(func).(data)
+          end
+        end
     end
   end
 
@@ -249,10 +397,12 @@ defmodule Carve.View do
   Defines how to render the view for the current entity.
 
   This macro specifies how to format the entity data for JSON output.
+  Accepts a 1-arity function, or a 2-arity function when used with `cache`.
 
   ## Parameters
 
-  - `func`: A function that takes the entity data and returns a map for JSON rendering.
+  - `func`: A function that takes the entity data (and optionally cached data)
+    and returns a map for JSON rendering.
 
   ## Example
 
@@ -265,16 +415,32 @@ defmodule Carve.View do
       end
   """
   defmacro view(func) do
-    quote do
-      def prepare_for_view(data) do
-        view = unquote(func).(data)
+    case detect_fn_arity(func) do
+      2 ->
+        quote do
+          def prepare_for_view(data, cached) do
+            view = unquote(func).(data, cached)
 
-        %{
-          id: hash(data.id),
-          type: type_name(),
-          data: view
-        }
-      end
+            %{
+              id: hash(data.id),
+              type: type_name(),
+              data: view
+            }
+          end
+        end
+
+      _ ->
+        quote do
+          def prepare_for_view(data) do
+            view = unquote(func).(data)
+
+            %{
+              id: hash(data.id),
+              type: type_name(),
+              data: view
+            }
+          end
+        end
     end
   end
 
@@ -312,4 +478,8 @@ defmodule Carve.View do
       end
     end
   end
+
+  # Detect the arity of a literal fn from its AST
+  defp detect_fn_arity({:fn, _, [{:->, _, [args, _]} | _]}) when is_list(args), do: length(args)
+  defp detect_fn_arity(_), do: 1
 end
