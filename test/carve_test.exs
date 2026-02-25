@@ -114,8 +114,8 @@ defmodule Carve.CarveTest do
         }
       },
       links: [
-        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}},
-        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: Carve.HashIds.encode(:comment, 10), content: "Comment for post 1"}}
+        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: Carve.HashIds.encode(:comment, 10), content: "Comment for post 1"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}}
       ]
     }
     assert result == expected
@@ -149,10 +149,10 @@ defmodule Carve.CarveTest do
         }
       ],
       links: [
-        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}},
         %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: Carve.HashIds.encode(:comment, 10), content: "Comment for post 1"}},
-        %{type: :user, id: Carve.HashIds.encode(:user, 4), data: %{id: Carve.HashIds.encode(:user, 4), name: "User 4"}},
-        %{type: :comment, id: Carve.HashIds.encode(:comment, 20), data: %{id: Carve.HashIds.encode(:comment, 20), content: "Comment for post 2"}}
+        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}},
+        %{type: :comment, id: Carve.HashIds.encode(:comment, 20), data: %{id: Carve.HashIds.encode(:comment, 20), content: "Comment for post 2"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 4), data: %{id: Carve.HashIds.encode(:user, 4), name: "User 4"}}
       ]
     }
     assert result == expected

@@ -114,8 +114,8 @@ defmodule Carve.ViewTest do
         }
       },
       links: [
-        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: "_5Tp11Gp", name: "User 2"}},
-        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: "4VcRZPv4", content: "Comment for post 1"}}
+        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: Carve.HashIds.encode(:comment, 10), content: "Comment for post 1"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}}
       ]
     }
     assert result == expected
@@ -149,10 +149,10 @@ defmodule Carve.ViewTest do
         }
       ],
       links: [
-        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: "_5Tp11Gp", name: "User 2"}},
-        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: "4VcRZPv4", content: "Comment for post 1"}},
-        %{type: :user, id: Carve.HashIds.encode(:user, 4), data: %{id: "bZiP44AP", name: "User 4"}},
-        %{type: :comment, id: Carve.HashIds.encode(:comment, 20), data: %{id: "xySVq291", content: "Comment for post 2"}}
+        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: Carve.HashIds.encode(:comment, 10), content: "Comment for post 1"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}},
+        %{type: :comment, id: Carve.HashIds.encode(:comment, 20), data: %{id: Carve.HashIds.encode(:comment, 20), content: "Comment for post 2"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 4), data: %{id: Carve.HashIds.encode(:user, 4), name: "User 4"}}
       ]
     }
     assert result == expected
@@ -176,7 +176,7 @@ test "show function with include parameter works correctly" do
         }
       },
       links: [
-        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: "_5Tp11Gp", name: "User 2"}}
+        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}}
       ]
     }
     assert result == expected
@@ -228,8 +228,8 @@ test "show function with include parameter works correctly" do
         }
       ],
       links: [
-        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: "_5Tp11Gp", name: "User 2"}},
-        %{type: :user, id: Carve.HashIds.encode(:user, 4), data: %{id: "bZiP44AP", name: "User 4"}}
+        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 4), data: %{id: Carve.HashIds.encode(:user, 4), name: "User 4"}}
       ]
     }
     assert result == expected
@@ -281,8 +281,8 @@ test "show function with include parameter works correctly" do
         }
       },
       links: [
-        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: "_5Tp11Gp", name: "User 2"}},
-        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: "4VcRZPv4", content: "Comment for post 1"}}
+        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: Carve.HashIds.encode(:comment, 10), content: "Comment for post 1"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}}
       ]
     }
     assert result == expected
@@ -316,10 +316,10 @@ test "show function with include parameter works correctly" do
         }
       ],
       links: [
-        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: "_5Tp11Gp", name: "User 2"}},
-        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: "4VcRZPv4", content: "Comment for post 1"}},
-        %{type: :user, id: Carve.HashIds.encode(:user, 4), data: %{id: "bZiP44AP", name: "User 4"}},
-        %{type: :comment, id: Carve.HashIds.encode(:comment, 20), data: %{id: "xySVq291", content: "Comment for post 2"}}
+        %{type: :comment, id: Carve.HashIds.encode(:comment, 10), data: %{id: Carve.HashIds.encode(:comment, 10), content: "Comment for post 1"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 2), data: %{id: Carve.HashIds.encode(:user, 2), name: "User 2"}},
+        %{type: :comment, id: Carve.HashIds.encode(:comment, 20), data: %{id: Carve.HashIds.encode(:comment, 20), content: "Comment for post 2"}},
+        %{type: :user, id: Carve.HashIds.encode(:user, 4), data: %{id: Carve.HashIds.encode(:user, 4), name: "User 4"}}
       ]
     }
     assert result == expected
