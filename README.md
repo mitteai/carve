@@ -371,11 +371,11 @@ def index(conn, params) do
 
 ### Request-scoped cache
 
-Carve caches linked resource lookups within a single request using [cachex](https://github.com/whitfin/cachex). TTL is 100ms by default. Increase it if your requests involve slow queries.
+Carve deduplicates linked resource lookups within a single request using [cachex](https://github.com/whitfin/cachex). Each request gets an isolated cache that's cleared when the response completes. TTL (default 500ms) acts as a safety net for slow requests.
 
 ```elixir
 config :carve, Carve.Config,
-  cache_ttl: 5_000,   # milliseconds, default 100
+  cache_ttl: 5_000,   # milliseconds, default 500
   enable_cache: false  # set to disable caching entirely
 ```
 

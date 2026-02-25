@@ -1,54 +1,82 @@
 defmodule Carve.Links do
-  # Update all public functions to accept cache_key as last parameter
-  def get_links_by_id(module, id, visited \\ %{}, whitelist \\ nil, cache_key \\ nil)
-  def get_links_by_id(_module, nil, _visited, _whitelist, _cache_key), do: []
+  # Public API — returns lists (backward compatible)
 
-  def get_links_by_id(module, id, visited, whitelist, cache_key) when not is_list(id) do
+  def get_links_by_id(module, id, visited \\ %{}, whitelist \\ nil, cache_key \\ nil) do
+    {links, _visited} = do_get_links_by_id(module, id, visited, whitelist, cache_key)
+    links
+  end
+
+  def get_links_by_data(module, data, visited \\ %{}, whitelist \\ nil, cache_key \\ nil) do
+    {links, _visited} = do_get_links_by_data(module, data, visited, whitelist, cache_key)
+    links
+  end
+
+  # Internal API — returns {links, visited} to accumulate visited across items
+
+  defp do_get_links_by_id(_module, nil, visited, _whitelist, _cache_key), do: {[], visited}
+
+  defp do_get_links_by_id(module, id, visited, whitelist, cache_key) when not is_list(id) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
     case Map.get(visited, {module, id}) do
       nil ->
-        # Use cache for get_by_id calls
         data = Carve.Cache.fetch(cache_key, {module, :get, id}, fn ->
           module.get_by_id(id)
         end)
 
         case data do
-          nil -> []
-          data -> get_links_by_data(module, data, visited, whitelist, cache_key) |> prepare_result(whitelist)
+          nil ->
+            {[], visited}
+
+          data ->
+            {links, visited} = do_get_links_by_data(module, data, visited, whitelist, cache_key)
+            {prepare_result(links, whitelist), visited}
         end
 
       _ ->
-        []
+        {[], visited}
     end
   end
 
-  def get_links_by_id(module, ids, visited, whitelist, cache_key) when is_list(ids) do
+  defp do_get_links_by_id(module, ids, visited, whitelist, cache_key) when is_list(ids) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
-    Enum.flat_map(ids, &get_links_by_id(module, &1, visited, whitelist, cache_key))
-    |> prepare_result(whitelist)
+    {links, visited} =
+      Enum.reduce(ids, {[], visited}, fn id, {acc, vis} ->
+        {new_links, vis} = do_get_links_by_id(module, id, vis, whitelist, cache_key)
+        {acc ++ new_links, vis}
+      end)
+
+    {prepare_result(links, whitelist), visited}
   end
 
-  def get_links_by_data(module, data, visited \\ %{}, whitelist \\ nil, cache_key \\ nil)
-  def get_links_by_data(_module, nil, _visited, _whitelist, _cache_key), do: []
+  defp do_get_links_by_data(_module, nil, visited, _whitelist, _cache_key), do: {[], visited}
 
-  def get_links_by_data(module, data_list, visited, whitelist, cache_key) when is_list(data_list) do
+  defp do_get_links_by_data(module, data_list, visited, whitelist, cache_key)
+       when is_list(data_list) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
-    Enum.flat_map(data_list, &get_links_by_data(module, &1, visited, whitelist, cache_key))
-    |> prepare_result(whitelist)
+    {links, visited} =
+      Enum.reduce(data_list, {[], visited}, fn item, {acc, vis} ->
+        {new_links, vis} = do_get_links_by_data(module, item, vis, whitelist, cache_key)
+        {acc ++ new_links, vis}
+      end)
+
+    {prepare_result(links, whitelist), visited}
   end
 
-  def get_links_by_data(_module, data, _visited, _whitelist, _cache_key) when not is_map(data), do: []
+  defp do_get_links_by_data(_module, data, visited, _whitelist, _cache_key)
+       when not is_map(data),
+       do: {[], visited}
 
-  def get_links_by_data(module, data, visited, whitelist, cache_key) when not is_list(data) do
+  defp do_get_links_by_data(module, data, visited, whitelist, cache_key)
+       when not is_list(data) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
     case fetch_id(data) do
       {:ok, id} ->
         if Map.get(visited, {module, id}) do
-          []
+          {[], visited}
         else
           visited = Map.put(visited, {module, id}, true)
 
@@ -58,34 +86,30 @@ defmodule Carve.Links do
             module.declare_links(data, cached)
             |> filter_and_evaluate_links(whitelist)
 
-          links =
-            links
-            |> Enum.flat_map(fn {link_module, link_data_or_ids} ->
+          {links, visited} =
+            Enum.reduce(links, {[], visited}, fn {link_module, link_data_or_ids}, {acc, vis} ->
               link_data_or_ids
               |> normalize_link_ids()
-              |> Enum.map(fn link_id_or_data ->
-                link = process_single_link(link_module, link_id_or_data, visited, cache_key)
+              |> Enum.reduce({acc, vis}, fn link_id_or_data, {acc, vis} ->
+                link = process_single_link(link_module, link_id_or_data, vis, cache_key)
 
-                children =
-                  if Map.get(visited, {link_module, extract_id(link_id_or_data)}) do
-                    []
+                # let do_get_links_by_id/data mark visited internally
+                {children, vis} =
+                  if is_map(link_id_or_data) do
+                    do_get_links_by_data(link_module, link_id_or_data, vis, whitelist, cache_key)
                   else
-                    if is_map(link_id_or_data) do
-                      get_links_by_data(link_module, link_id_or_data, visited, whitelist, cache_key)
-                    else
-                      get_links_by_id(link_module, link_id_or_data, visited, whitelist, cache_key)
-                    end
+                    do_get_links_by_id(link_module, link_id_or_data, vis, whitelist, cache_key)
                   end
 
-                [link | children]
+                {acc ++ [link | children], vis}
               end)
             end)
 
-          prepare_result(links, whitelist)
+          {prepare_result(links, whitelist), visited}
         end
 
       :error ->
-        []
+        {[], visited}
     end
   end
 
@@ -96,7 +120,6 @@ defmodule Carve.Links do
     end)
   end
 
-  # Update process_single_link to use cache
   defp process_single_link(module, id, visited, cache_key) when is_number(id) or is_binary(id) do
     case Map.get(visited, {module, id}) do
       nil ->
@@ -133,7 +156,6 @@ defmodule Carve.Links do
     end
   end
 
-  # Keep all other private functions unchanged
   defp filter_and_evaluate_links(links, nil) do
     links
     |> Enum.filter(fn {_, value} -> not is_function(value) end)
@@ -165,7 +187,7 @@ defmodule Carve.Links do
     |> filter_result(whitelist)
   end
 
-  defp filter_result(result, []), do: []
+  defp filter_result(_result, []), do: []
   defp filter_result(result, nil), do: result
 
   defp filter_result(result, whitelist) do

@@ -3,7 +3,7 @@ defmodule Carve.Cache do
   @moduledoc """
   Request-scoped cache for Carve to prevent redundant data fetching within a single render.
   Each render operation gets its own isolated cache keyed by a unique ref.
-  TTL defaults to 100ms. Increase if requests involve slow queries.
+  TTL defaults to 500ms. Increase if requests involve slow queries.
   The cache is cleared at end of each render regardless of TTL.
 
   Configuration:
@@ -45,7 +45,16 @@ defmodule Carve.Cache do
       case Map.get(cache_data, key) do
         nil ->
           value = fun.()
-          updated_cache = Map.put(cache_data, key, value)
+
+          # Re-read cache to pick up writes from nested fetch calls
+          current_cache =
+            case Cachex.get(:carve_cache, cache_key) do
+              {:ok, nil} -> %{}
+              {:ok, data} -> data
+              {:error, _} -> %{}
+            end
+
+          updated_cache = Map.put(current_cache, key, value)
           Cachex.put(:carve_cache, cache_key, updated_cache, ttl: Carve.Config.cache_ttl())
           value
 
