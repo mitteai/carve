@@ -25,4 +25,11 @@ defmodule Carve.Config do
   def caching_enabled? do
     get(:enable_cache, true)
   end
+
+  @doc """
+  Returns the cache TTL in milliseconds. Defaults to 30000 (30s).
+  """
+  def cache_ttl do
+    get(:cache_ttl, 100)
+  end
 end

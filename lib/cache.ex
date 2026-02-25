@@ -2,15 +2,16 @@
 defmodule Carve.Cache do
   @moduledoc """
   Request-scoped cache for Carve to prevent redundant data fetching within a single render.
-  Each render operation gets its own isolated cache that expires after 100ms.
+  Each render operation gets its own isolated cache keyed by a unique ref.
+  TTL defaults to 100ms. Increase if requests involve slow queries.
+  The cache is cleared at end of each render regardless of TTL.
 
-  Can be disabled via config:
+  Configuration:
 
       config :carve, Carve.Config,
-        enable_cache: false
+        enable_cache: false,
+        cache_ttl: 100
   """
-
-  @ttl 100
 
   @doc """
   Creates a new cache context for a render operation.
@@ -19,7 +20,7 @@ defmodule Carve.Cache do
   def new_context do
     if Carve.Config.caching_enabled?() do
       cache_key = make_ref()
-      Cachex.put(:carve_cache, cache_key, %{}, ttl: @ttl)
+      Cachex.put(:carve_cache, cache_key, %{}, ttl: Carve.Config.cache_ttl())
       cache_key
     else
       nil
@@ -34,24 +35,22 @@ defmodule Carve.Cache do
 
   def fetch(cache_key, key, fun) when is_function(fun, 0) do
     if Carve.Config.caching_enabled?() do
-      case Cachex.get(:carve_cache, cache_key) do
-        {:ok, nil} ->
-          fun.()
+      cache_data =
+        case Cachex.get(:carve_cache, cache_key) do
+          {:ok, nil} -> %{}
+          {:ok, data} -> data
+          {:error, _} -> %{}
+        end
 
-        {:ok, cache_data} ->
-          case Map.get(cache_data, key) do
-            nil ->
-              value = fun.()
-              updated_cache = Map.put(cache_data, key, value)
-              Cachex.put(:carve_cache, cache_key, updated_cache, ttl: @ttl)
-              value
+      case Map.get(cache_data, key) do
+        nil ->
+          value = fun.()
+          updated_cache = Map.put(cache_data, key, value)
+          Cachex.put(:carve_cache, cache_key, updated_cache, ttl: Carve.Config.cache_ttl())
+          value
 
-            cached_value ->
-              cached_value
-          end
-
-        {:error, _} ->
-          fun.()
+        cached_value ->
+          cached_value
       end
     else
       fun.()
