@@ -391,19 +391,22 @@ defmodule UserJSON do
 
   cache fn user ->
     %{
-      plan: Plans.get_active_plan(user.id),
-      team_plan: Plans.get_team_plan(user.id)
+      comments: Comments.list_by_user_id(user.id),
+      teams: Teams.list_teams_by_user_id(user.id)
     }
   end
 
   links fn user, cached ->
-    %{PlanJSON => cached.plan.id}
+    %{
+      CommentJSON => Enum.map(cached.comments, fn comment -> comment.id end),
+      TeamJSON => Enum.map(cached.teams, fn team -> team.id end)
+    }
   end
 
   view fn user, cached ->
     %{
       id: hash(user.id),
-      plan_id: PlanJSON.hash(cached.plan.id)
+      comment_count: length(cached.comments)
     }
   end
 end
