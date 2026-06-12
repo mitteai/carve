@@ -399,6 +399,11 @@ defmodule Carve.View do
   This macro specifies how to format the entity data for JSON output.
   Accepts a 1-arity function, or a 2-arity function when used with `cache`.
 
+  The `id` returned by the function is also used as the entity's envelope id,
+  so a view can expose a custom identifier (e.g. a slug) instead of the
+  hashed id. When the function returns no `id`, the envelope falls back to
+  `hash(data.id)`.
+
   ## Parameters
 
   - `func`: A function that takes the entity data (and optionally cached data)
@@ -422,7 +427,7 @@ defmodule Carve.View do
             view = unquote(func).(data, cached)
 
             %{
-              id: hash(data.id),
+              id: Map.get(view, :id) || hash(data.id),
               type: type_name(),
               data: view
             }
@@ -435,7 +440,7 @@ defmodule Carve.View do
             view = unquote(func).(data)
 
             %{
-              id: hash(data.id),
+              id: Map.get(view, :id) || hash(data.id),
               type: type_name(),
               data: view
             }
