@@ -56,6 +56,8 @@ defmodule Carve.Links do
        when is_list(data_list) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
+    warm_level(module, data_list, visited, whitelist, cache_key)
+
     {links, visited} =
       Enum.reduce(data_list, {[], visited}, fn item, {acc, vis} ->
         {new_links, vis} = do_get_links_by_data(module, item, vis, whitelist, cache_key)
@@ -82,9 +84,11 @@ defmodule Carve.Links do
 
           cached = fetch_cached(module, data, id, cache_key)
 
-          links =
-            module.declare_links(data, cached)
-            |> filter_and_evaluate_links(whitelist)
+          raw_links = fetch_links(module, data, id, cached, cache_key)
+
+          warm_link_targets([raw_links], visited, whitelist, cache_key)
+
+          links = filter_and_evaluate_links(raw_links, whitelist)
 
           {links, visited} =
             Enum.reduce(links, {[], visited}, fn {link_module, link_data_or_ids}, {acc, vis} ->
@@ -119,6 +123,91 @@ defmodule Carve.Links do
       module.__cache__(data)
     end)
   end
+
+  # ── batched warm-up (cache_many) ─────────────────────────────────────
+
+  # Memoized declare_links, so the warm-up pre-pass and the traversal
+  # evaluate each entity's links function once per request.
+  defp fetch_links(module, data, id, cached, cache_key) do
+    Carve.Cache.fetch(cache_key, {module, :links, id}, fn ->
+      module.declare_links(data, cached)
+    end)
+  end
+
+  # Cross-item warm-up for a list render: batch the list's own cache, then
+  # batch the cache of every linked entity set whose view defines
+  # cache_many, so the per-item traversal below hits the cache throughout.
+  # Skipped when caching is disabled (nil cache_key) — the traversal stays
+  # correct through the per-entity batch-of-one __cache__ fallback.
+  defp warm_level(_module, _data_list, _visited, _whitelist, nil), do: :ok
+
+  defp warm_level(module, data_list, visited, whitelist, cache_key) do
+    items =
+      Enum.filter(data_list, fn item ->
+        with true <- is_map(item),
+             {:ok, id} <- fetch_id(item) do
+          !Map.get(visited, {module, id})
+        else
+          _ -> false
+        end
+      end)
+
+    cached_by_id = Carve.Batch.warm(module, items, cache_key)
+
+    raw_links_list =
+      Enum.map(items, fn item ->
+        {:ok, id} = fetch_id(item)
+        fetch_links(module, item, id, Map.get(cached_by_id, id), cache_key)
+      end)
+
+    warm_link_targets(raw_links_list, visited, whitelist, cache_key)
+  end
+
+  # Warm the cache of link targets, grouped by view module, one batch per
+  # module that defines cache_many. Lazy (function) links are left to the
+  # traversal so they are never evaluated twice.
+  defp warm_link_targets(_raw_links_list, _visited, _whitelist, nil), do: :ok
+
+  defp warm_link_targets(raw_links_list, visited, whitelist, cache_key) do
+    raw_links_list
+    |> Enum.flat_map(fn raw_links ->
+      for {link_module, value} <- raw_links,
+          not is_function(value),
+          link_whitelisted?(link_module, whitelist),
+          Carve.Batch.batched?(link_module),
+          target <- normalize_link_ids(value),
+          do: {link_module, target}
+    end)
+    |> Enum.group_by(fn {module, _} -> module end, fn {_, target} -> target end)
+    |> Enum.each(fn {link_module, targets} ->
+      entities =
+        targets
+        |> Enum.reject(fn target ->
+          case fetch_id(target) do
+            {:ok, id} -> Map.get(visited, {link_module, id}) != nil
+            :error -> true
+          end
+        end)
+        |> Enum.map(fn
+          id when is_number(id) or is_binary(id) ->
+            Carve.Cache.fetch(cache_key, {link_module, :get, id}, fn ->
+              link_module.get_by_id(id)
+            end)
+
+          data ->
+            data
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      Carve.Batch.warm(link_module, entities, cache_key)
+    end)
+  end
+
+  defp link_whitelisted?(_module, nil), do: true
+  defp link_whitelisted?(_module, []), do: false
+
+  defp link_whitelisted?(module, whitelist) when is_list(whitelist),
+    do: module.type_name() in whitelist
 
   defp process_single_link(module, id, visited, cache_key) when is_number(id) or is_binary(id) do
     case Map.get(visited, {module, id}) do

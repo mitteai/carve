@@ -35,34 +35,56 @@ defmodule Carve.Cache do
 
   def fetch(cache_key, key, fun) when is_function(fun, 0) do
     if Carve.Config.caching_enabled?() do
-      cache_data =
-        case Cachex.get(:carve_cache, cache_key) do
-          {:ok, nil} -> %{}
-          {:ok, data} -> data
-          {:error, _} -> %{}
-        end
-
-      case Map.get(cache_data, key) do
-        nil ->
-          value = fun.()
-
-          # Re-read cache to pick up writes from nested fetch calls
-          current_cache =
-            case Cachex.get(:carve_cache, cache_key) do
-              {:ok, nil} -> %{}
-              {:ok, data} -> data
-              {:error, _} -> %{}
-            end
-
-          updated_cache = Map.put(current_cache, key, value)
-          Cachex.put(:carve_cache, cache_key, updated_cache, ttl: Carve.Config.cache_ttl())
-          value
-
-        cached_value ->
+      # Map.fetch, not Map.get: a cached nil (e.g. a missing entity or a
+      # cache_many id absent from the batch result) is a hit, not a miss.
+      case Map.fetch(read(cache_key), key) do
+        {:ok, cached_value} ->
           cached_value
+
+        :error ->
+          value = fun.()
+          put(cache_key, key, value)
+          value
       end
     else
       fun.()
+    end
+  end
+
+  @doc """
+  Looks up a cached value without computing it.
+  Returns `{:ok, value}` (value may be nil) or `:error` when the key is
+  absent or caching is disabled.
+  """
+  def peek(nil, _key), do: :error
+
+  def peek(cache_key, key) do
+    if Carve.Config.caching_enabled?() do
+      Map.fetch(read(cache_key), key)
+    else
+      :error
+    end
+  end
+
+  @doc """
+  Stores a value in the request cache. No-op when caching is disabled.
+  """
+  def put(nil, _key, _value), do: :ok
+
+  def put(cache_key, key, value) do
+    if Carve.Config.caching_enabled?() do
+      # Re-read before writing to pick up writes from nested fetch calls
+      updated = Map.put(read(cache_key), key, value)
+      Cachex.put(:carve_cache, cache_key, updated, ttl: Carve.Config.cache_ttl())
+    end
+
+    :ok
+  end
+
+  defp read(cache_key) do
+    case Cachex.get(:carve_cache, cache_key) do
+      {:ok, %{} = data} -> data
+      _ -> %{}
     end
   end
 

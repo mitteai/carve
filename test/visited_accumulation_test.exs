@@ -200,8 +200,11 @@ defmodule Carve.VisitedAccumulationTest do
   # ── test setup ──────────────────────────────────────────────────────
 
   setup do
-    {:ok, _} = Agent.start_link(fn -> %{} end, name: :visited_tracker)
-    on_exit(fn -> if Process.whereis(:visited_tracker), do: Agent.stop(:visited_tracker) end)
+    start_supervised!(%{
+      id: :visited_tracker,
+      start: {Agent, :start_link, [fn -> %{} end, [name: :visited_tracker]]}
+    })
+
     :ok
   end
 

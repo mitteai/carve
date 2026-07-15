@@ -57,13 +57,10 @@ defmodule Carve.CacheTest do
   end
 
   setup do
-    {:ok, _pid} = Agent.start_link(fn -> %{} end, name: :fetch_tracker)
-
-    on_exit(fn ->
-      if Process.whereis(:fetch_tracker) do
-        Agent.stop(:fetch_tracker)
-      end
-    end)
+    start_supervised!(%{
+      id: :fetch_tracker,
+      start: {Agent, :start_link, [fn -> %{} end, [name: :fetch_tracker]]}
+    })
 
     :ok
   end

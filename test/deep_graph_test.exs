@@ -128,8 +128,11 @@ defmodule Carve.DeepGraphTest do
   end
 
   setup do
-    {:ok, _} = Agent.start_link(fn -> %{} end, name: :deep_graph_tracker)
-    on_exit(fn -> if Process.whereis(:deep_graph_tracker), do: Agent.stop(:deep_graph_tracker) end)
+    start_supervised!(%{
+      id: :deep_graph_tracker,
+      start: {Agent, :start_link, [fn -> %{} end, [name: :deep_graph_tracker]]}
+    })
+
     :ok
   end
 

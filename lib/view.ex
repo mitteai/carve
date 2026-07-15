@@ -140,16 +140,38 @@ defmodule Carve.View do
         Module.defines?(env.module, {:declare_links, 2})
 
     has_cache = Module.defines?(env.module, {:__cache__, 1})
+    has_cache_many = Module.defines?(env.module, {:__cache_many__, 1})
     has_2arity_view = Module.defines?(env.module, {:prepare_for_view, 2})
     has_2arity_links = Module.defines?(env.module, {:declare_links, 2})
     has_1arity_links = Module.defines?(env.module, {:declare_links, 1})
 
+    if has_cache and has_cache_many do
+      raise CompileError,
+        file: env.file,
+        line: env.line,
+        description:
+          "#{inspect(env.module)} defines both cache and cache_many; " <>
+            "they are two calling conventions for the same slot — define only one"
+    end
+
     # Generate fallback for __cache__ if not defined
     cache_fallback =
-      unless has_cache do
-        quote do
-          def __cache__(_data), do: %{}
-        end
+      cond do
+        has_cache ->
+          nil
+
+        has_cache_many ->
+          # Per-entity fallback for paths that don't batch: a batch of one.
+          quote do
+            def __cache__(data) do
+              Map.get(__cache_many__([data]), Carve.Batch.entity_id(data))
+            end
+          end
+
+        true ->
+          quote do
+            def __cache__(_data), do: %{}
+          end
       end
 
     # Generate 2-arity fallback for prepare_for_view
@@ -209,10 +231,7 @@ defmodule Carve.View do
 
       # Internal show implementation
       defp do_show(%{result: data, include: include}, cache_key) do
-        cached =
-          Carve.Cache.fetch(cache_key, {__MODULE__, :cache, data.id}, fn ->
-            __cache__(data)
-          end)
+        cached = Map.get(Carve.Batch.warm(__MODULE__, [data], cache_key), data.id)
 
         result = prepare_for_view(data, cached)
 
@@ -227,10 +246,7 @@ defmodule Carve.View do
       end
 
       defp do_show(%{result: data}, cache_key) do
-        cached =
-          Carve.Cache.fetch(cache_key, {__MODULE__, :cache, data.id}, fn ->
-            __cache__(data)
-          end)
+        cached = Map.get(Carve.Batch.warm(__MODULE__, [data], cache_key), data.id)
 
         result = prepare_for_view(data, cached)
 
@@ -246,14 +262,11 @@ defmodule Carve.View do
 
       # Internal index implementation
       defp do_index(%{result: data, include: include}, cache_key) when is_list(data) do
+        cached_by_id = Carve.Batch.warm(__MODULE__, data, cache_key)
+
         results =
           Enum.map(data, fn item ->
-            cached =
-              Carve.Cache.fetch(cache_key, {__MODULE__, :cache, item.id}, fn ->
-                __cache__(item)
-              end)
-
-            prepare_for_view(item, cached)
+            prepare_for_view(item, Map.get(cached_by_id, item.id))
           end)
 
         links =
@@ -267,14 +280,11 @@ defmodule Carve.View do
       end
 
       defp do_index(%{result: data}, cache_key) when is_list(data) do
+        cached_by_id = Carve.Batch.warm(__MODULE__, data, cache_key)
+
         results =
           Enum.map(data, fn item ->
-            cached =
-              Carve.Cache.fetch(cache_key, {__MODULE__, :cache, item.id}, fn ->
-                __cache__(item)
-              end)
-
-            prepare_for_view(item, cached)
+            prepare_for_view(item, Map.get(cached_by_id, item.id))
           end)
 
         links =
@@ -351,6 +361,37 @@ defmodule Carve.View do
     quote do
       def __cache__(data) do
         unquote(func).(data)
+      end
+    end
+  end
+
+  @doc """
+  Batch sibling of `cache`: computes the cached data for every entity of a
+  render in one call instead of once per entity, so a query inside it runs
+  once per render instead of once per row.
+
+  The function receives the list of entities about to be rendered and must
+  return a map keyed by entity id. Each entity's value is passed to `links`
+  and `view` as their second argument, exactly like `cache`. Ids missing
+  from the returned map are cached as nil, and the view handles absence per
+  entity. Defining both `cache` and `cache_many` in one view is a
+  compile-time error.
+
+  ## Example
+
+      cache_many fn posts ->
+        counts = Comments.count_for(Enum.map(posts, & &1.id))
+        Map.new(posts, fn post -> {post.id, %{comment_count: counts[post.id]}} end)
+      end
+
+      view fn post, cached ->
+        %{id: hash(post.id), comment_count: cached.comment_count}
+      end
+  """
+  defmacro cache_many(func) do
+    quote do
+      def __cache_many__(entities) when is_list(entities) do
+        unquote(func).(entities)
       end
     end
   end

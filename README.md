@@ -416,6 +416,32 @@ The `cache` function runs once per entity per request. If the same user is linke
 
 Modules without `cache` are unaffected — single-argument `links` and `view` work as before.
 
+### Batch queries for lists (`cache_many`)
+
+A query inside `cache` runs once per entity — an index of 100 posts runs it 100 times. Use `cache_many` to load the data for all of them with one query:
+
+```elixir
+defmodule PostJSON do
+  use Carve.View, :post
+
+  # Runs once per render with all posts being rendered.
+  # Return a map of post id => value.
+  cache_many fn posts ->
+    counts = Comments.count_for(Enum.map(posts, & &1.id))
+    Map.new(posts, fn post -> {post.id, %{comment_count: counts[post.id]}} end)
+  end
+
+  view fn post, cached ->
+    %{
+      id: hash(post.id),
+      comment_count: cached.comment_count
+    }
+  end
+end
+```
+
+`view` and `links` receive each entity's own value as the second argument, same as with `cache`. Entities missing from the returned map get `nil`. A view defines either `cache` or `cache_many`, not both.
+
 ## How does it work?
 
 * Carve macros create view functions `index(%{ result: users })` and `show(%{ result: user })`
