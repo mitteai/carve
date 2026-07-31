@@ -2,15 +2,14 @@
 defmodule Carve.Cache do
   @moduledoc """
   Request-scoped cache for Carve to prevent redundant data fetching within a single render.
-  Each render operation gets its own isolated cache keyed by a unique ref.
-  TTL defaults to 500ms. Increase if requests involve slow queries.
-  The cache is cleared at end of each render regardless of TTL.
+  Each render operation gets its own isolated cache keyed by a unique ref, stored in the
+  render process's dictionary — a render is single-process, so the cache never needs to
+  cross process boundaries. The cache is cleared at the end of each render.
 
   Configuration:
 
       config :carve, Carve.Config,
-        enable_cache: false,
-        cache_ttl: 100
+        enable_cache: false
   """
 
   @doc """
@@ -20,7 +19,7 @@ defmodule Carve.Cache do
   def new_context do
     if Carve.Config.caching_enabled?() do
       cache_key = make_ref()
-      Cachex.put(:carve_cache, cache_key, %{}, ttl: Carve.Config.cache_ttl())
+      Process.put({:carve_cache, cache_key}, %{})
       cache_key
     else
       nil
@@ -75,17 +74,14 @@ defmodule Carve.Cache do
     if Carve.Config.caching_enabled?() do
       # Re-read before writing to pick up writes from nested fetch calls
       updated = Map.put(read(cache_key), key, value)
-      Cachex.put(:carve_cache, cache_key, updated, ttl: Carve.Config.cache_ttl())
+      Process.put({:carve_cache, cache_key}, updated)
     end
 
     :ok
   end
 
   defp read(cache_key) do
-    case Cachex.get(:carve_cache, cache_key) do
-      {:ok, %{} = data} -> data
-      _ -> %{}
-    end
+    Process.get({:carve_cache, cache_key}, %{})
   end
 
   @doc """
@@ -113,7 +109,10 @@ defmodule Carve.Cache do
   """
   def clear_context do
     if Carve.Config.caching_enabled?() do
-      Process.delete(:carve_cache_key)
+      case Process.delete(:carve_cache_key) do
+        nil -> :ok
+        cache_key -> Process.delete({:carve_cache, cache_key})
+      end
     end
   end
 end
