@@ -37,6 +37,13 @@ defmodule Carve.HashIds do
     min_length = Keyword.get(opts, :min_length, @default_min_length)
     :persistent_term.put(:carve_hash_ids_salt, salt)
     :persistent_term.put(:carve_hash_ids_min_length, min_length)
+
+    # Build the Hashids context once — Hashids.new validates and shuffles the
+    # alphabet, far too expensive to repeat on every encode/decode call.
+    :persistent_term.put(
+      :carve_hash_ids_provider,
+      Hashids.new(salt: salt, min_len: min_length, alphabet: @alphabet)
+    )
   end
 
   @doc """
@@ -125,8 +132,18 @@ defmodule Carve.HashIds do
   end
 
   defp provider do
-    salt = :persistent_term.get(:carve_hash_ids_salt)
-    min_length = :persistent_term.get(:carve_hash_ids_min_length)
-    Hashids.new(salt: salt, min_len: min_length, alphabet: @alphabet)
+    case :persistent_term.get(:carve_hash_ids_provider, nil) do
+      nil ->
+        # configure/1 not called yet — build once from the stored settings
+        # and memoize.
+        salt = :persistent_term.get(:carve_hash_ids_salt)
+        min_length = :persistent_term.get(:carve_hash_ids_min_length)
+        hashids = Hashids.new(salt: salt, min_len: min_length, alphabet: @alphabet)
+        :persistent_term.put(:carve_hash_ids_provider, hashids)
+        hashids
+
+      hashids ->
+        hashids
+    end
   end
 end
