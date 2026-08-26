@@ -41,7 +41,7 @@ defmodule Carve.MixProject do
       {:hashids, "~> 2.1"},
       {:ex_doc, "~> 0.24", only: :dev, runtime: false},
       {:ecto, "~> 3.7", only: :test, runtime: false},
-      {:cachex, "~> 3.6"},
+      {:cachex, "~> 4.1"},
     ]
   end
 
