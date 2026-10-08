@@ -261,7 +261,7 @@ defmodule Carve.View do
       end
 
       # Internal index implementation
-      defp do_index(%{result: data, include: include}, cache_key) when is_list(data) do
+      defp do_index(%{result: data, include: include} = assigns, cache_key) when is_list(data) do
         cached_by_id = Carve.Batch.warm(__MODULE__, data, cache_key)
 
         results =
@@ -276,10 +276,10 @@ defmodule Carve.View do
             []
           end
 
-        %{result: results, links: links}
+        carve_count(%{result: results, links: links}, assigns)
       end
 
-      defp do_index(%{result: data}, cache_key) when is_list(data) do
+      defp do_index(%{result: data} = assigns, cache_key) when is_list(data) do
         cached_by_id = Carve.Batch.warm(__MODULE__, data, cache_key)
 
         results =
@@ -294,8 +294,17 @@ defmodule Carve.View do
             []
           end
 
-        %{result: results, links: links}
+        carve_count(%{result: results, links: links}, assigns)
       end
+
+      # A listing may carry how many rows it matches in all (the `count`
+      # assign, a controller's `Bind.count/1` result); it rides along the
+      # page as `count`.
+      defp carve_count(response, %{count: count}) when is_integer(count) do
+        Map.put(response, :count, count)
+      end
+
+      defp carve_count(response, _assigns), do: response
 
       # Keep all other generated functions the same
       def hash(id) when is_integer(id) do
