@@ -158,6 +158,20 @@ defmodule Carve.CarveTest do
     assert result == expected
   end
 
+  test "index carries the count assign as count" do
+    posts = [%TestPost{id: 1, title: "Test Post 1", user_id: 2}]
+
+    assert %{count: 42} = PostJSON.index(%{result: posts, count: 42})
+    assert %{count: 0} = PostJSON.index(%{result: [], include: [], count: 0})
+  end
+
+  test "index has no count key without the assign" do
+    posts = [%TestPost{id: 1, title: "Test Post 1", user_id: 2}]
+
+    refute Map.has_key?(PostJSON.index(%{result: posts}), :count)
+    refute Map.has_key?(PostJSON.index(%{result: posts, include: []}), :count)
+  end
+
   test "type_name function returns correct type" do
     assert :post == PostJSON.type_name()
   end

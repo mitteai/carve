@@ -1,17 +1,19 @@
 defmodule Carve.MixProject do
   use Mix.Project
 
+  @source_url "https://github.com/mitteai/carve"
+
   def project do
     [
       app: :carve,
-      version: "0.6.1",
+      version: "0.6.2",
       elixir: "~> 1.12",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description: description(),
       package: package(),
       name: "Carve",
-      source_url: "https://github.com/azer/carve",
+      source_url: @source_url,
       elixirc_paths: elixirc_paths(Mix.env()),
       package: [
         licenses: ["MIT"],
