@@ -1,6 +1,8 @@
 defmodule Carve.MixProject do
   use Mix.Project
 
+  @source_url "https://github.com/mitteai/carve"
+
   def project do
     [
       app: :carve,
@@ -11,7 +13,7 @@ defmodule Carve.MixProject do
       description: description(),
       package: package(),
       name: "Carve",
-      source_url: "https://github.com/azer/carve",
+      source_url: @source_url,
       elixirc_paths: elixirc_paths(Mix.env()),
       package: [
         licenses: ["MIT"],
