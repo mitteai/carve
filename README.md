@@ -64,7 +64,7 @@ Add `carve` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:carve, "~> 0.1.0"}
+    {:carve, "~> 0.7.0"}
   ]
 end
 ```
@@ -441,6 +441,52 @@ end
 ```
 
 `view` and `links` receive each entity's own value as the second argument, same as with `cache`. Entities missing from the returned map get `nil`. A view defines either `cache` or `cache_many`, not both.
+
+## The viewer
+
+A render may carry who is looking. `show/1` and `index/1` read the viewer from the assigns under a configured key (default `:viewer`); with Phoenix's `render/3` the conn assigns are merged in, so one config line makes every render carry the current user with no controller change:
+
+```elixir
+config :carve, Carve.Config, viewer: :current_user
+```
+
+Any of the four view functions takes the viewer as its last argument by arity, and every view on a render gets the same one, the root and each linked entity alike:
+
+```elixir
+cache fn user, viewer -> ... end
+cache_many fn users, viewer -> ... end
+links fn user, cached, viewer -> ... end
+view fn user, cached, viewer -> ... end
+```
+
+What a viewer means to an entity is the app's rule. Decide it once, keep it in the cache slot, and route on it:
+
+```elixir
+defmodule UserJSON do
+  use Carve.View, :user
+
+  cache_many fn users, viewer ->
+    audiences = Accounts.user_audiences(users, viewer)   # %{id => :owner | :team | :public}
+    Map.new(users, fn user -> {user.id, %{audience: audiences[user.id]}} end)
+  end
+
+  view fn user, cached -> json(cached.audience, user) end
+
+  defp json(:public, user), do: %{id: hash(user.id), name: user.name}
+  defp json(:team, user), do: json(:public, user) |> Map.put(:email, user.email)
+  defp json(:owner, user), do: json(:team, user) |> Map.put(:billing, user.billing)
+end
+```
+
+A `view` that returns `nil` means "not for this viewer": as a link the entity is left out and its own links are not walked; as a controller's own result it raises, because the controller authorized a row its view refuses.
+
+```elixir
+view fn plan, _cached, viewer ->
+  if viewer && viewer.id == plan.user_id, do: %{id: hash(plan.id), stripe_customer_id: plan.stripe_customer_id}
+end
+```
+
+A missing assign or a `nil` viewer is an anonymous render. Views that do not ask for the viewer render exactly as before.
 
 ## How does it work?
 

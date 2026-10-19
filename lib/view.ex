@@ -66,6 +66,25 @@ defmodule Carve.View do
   so if the same user is linked from multiple parents, the cache function
   runs only once.
 
+  ## The viewer
+
+  A render may carry who is looking. `show/1` and `index/1` read it from the
+  assigns under the configured key (`config :carve, Carve.Config, viewer:
+  :current_user`; the default key is `:viewer`), so a Phoenix `render/3`
+  passes `conn.assigns.current_user` with no controller change. Every
+  function of every view on the render, the root and each linked entity,
+  gets the same viewer when it asks for it by arity:
+
+      cache fn user, viewer -> ... end
+      cache_many fn users, viewer -> ... end
+      links fn user, cached, viewer -> ... end
+      view fn user, cached, viewer -> ... end
+
+  A `view` that returns `nil` says "not for this viewer": as a link the entity
+  is left out and its own links are not walked; as a controller's result it
+  raises, since the controller authorized a row its view refuses. Views that
+  do not ask for the viewer render exactly as before.
+
   ## Generated Functions
 
   The `use Carve.View, :type` macro generates several functions at compile time:
@@ -76,7 +95,8 @@ defmodule Carve.View do
   - `encode_id/1`: Encodes an ID using the view type as a salt.
   - `decode_id/1`: Decodes an ID using the view type as a salt.
   - `type_name/0`: Returns the type of the view.
-  - `declare_links/1`: Processes links for an entity (if `links` macro is used).
+  - `prepare_for_view/3`: Renders one entity's envelope for a viewer, or nil.
+  - `declare_links/3`: Processes links for an entity (if `links` macro is used).
 
   Here's an example of what these functions might look like at runtime:
 
@@ -97,7 +117,7 @@ defmodule Carve.View do
 
       def type_name, do: :user
 
-      def declare_links(data) do
+      def declare_links(data, cached, viewer) do
         %{
           MyApp.TeamJSON => data.team_id,
           MyApp.ProfileJSON => data.profile_id
@@ -135,15 +155,9 @@ defmodule Carve.View do
 
   @doc false
   defmacro __before_compile__(env) do
-    has_declare_links =
-      Module.defines?(env.module, {:declare_links, 1}) ||
-        Module.defines?(env.module, {:declare_links, 2})
-
-    has_cache = Module.defines?(env.module, {:__cache__, 1})
-    has_cache_many = Module.defines?(env.module, {:__cache_many__, 1})
-    has_2arity_view = Module.defines?(env.module, {:prepare_for_view, 2})
-    has_2arity_links = Module.defines?(env.module, {:declare_links, 2})
-    has_1arity_links = Module.defines?(env.module, {:declare_links, 1})
+    has_declare_links = Module.defines?(env.module, {:declare_links, 3})
+    has_cache = Module.defines?(env.module, {:__cache__, 2})
+    has_cache_many = Module.defines?(env.module, {:__cache_many__, 2})
 
     if has_cache and has_cache_many do
       raise CompileError,
@@ -154,55 +168,31 @@ defmodule Carve.View do
             "they are two calling conventions for the same slot — define only one"
     end
 
-    # Generate fallback for __cache__ if not defined
+    # The per-entity cache slot: a batch of one when only cache_many is
+    # defined, empty when neither is.
     cache_fallback =
       cond do
         has_cache ->
           nil
 
         has_cache_many ->
-          # Per-entity fallback for paths that don't batch: a batch of one.
           quote do
-            def __cache__(data) do
-              Map.get(__cache_many__([data]), Carve.Batch.entity_id(data))
+            def __cache__(data, viewer) do
+              Map.get(__cache_many__([data], viewer), Carve.Batch.entity_id(data))
             end
           end
 
         true ->
           quote do
-            def __cache__(_data), do: %{}
+            def __cache__(_data, _viewer), do: %{}
           end
-      end
-
-    # Generate 2-arity fallback for prepare_for_view
-    view_fallback =
-      unless has_2arity_view do
-        quote do
-          def prepare_for_view(data, _cached), do: prepare_for_view(data)
-        end
-      end
-
-    # Generate 2-arity fallback for declare_links
-    links_fallback =
-      cond do
-        has_2arity_links ->
-          nil
-
-        has_1arity_links ->
-          quote do
-            def declare_links(data, _cached), do: declare_links(data)
-          end
-
-        true ->
-          nil
       end
 
     # Default declare_links if no links macro was used
     declare_links_default =
       unless has_declare_links do
         quote do
-          def declare_links(_), do: %{}
-          def declare_links(_, _), do: %{}
+          def declare_links(_data, _cached, _viewer), do: %{}
         end
       end
 
@@ -230,29 +220,16 @@ defmodule Carve.View do
       end
 
       # Internal show implementation
-      defp do_show(%{result: data, include: include}, cache_key) do
-        cached = Map.get(Carve.Batch.warm(__MODULE__, [data], cache_key), data.id)
+      defp do_show(%{result: data} = assigns, cache_key) do
+        viewer = Carve.View.viewer(assigns)
+        include = Map.get(assigns, :include)
+        cached = Map.get(Carve.Batch.warm(__MODULE__, [data], cache_key, viewer), data.id)
 
-        result = prepare_for_view(data, cached)
-
-        links =
-          if unquote(has_declare_links) do
-            Carve.Links.get_links_by_data(__MODULE__, data, %{}, include, cache_key)
-          else
-            []
-          end
-
-        %{result: result, links: links}
-      end
-
-      defp do_show(%{result: data}, cache_key) do
-        cached = Map.get(Carve.Batch.warm(__MODULE__, [data], cache_key), data.id)
-
-        result = prepare_for_view(data, cached)
+        result = result_for_viewer(data, cached, viewer)
 
         links =
           if unquote(has_declare_links) do
-            Carve.Links.get_links_by_data(__MODULE__, data, %{}, nil, cache_key)
+            Carve.Links.get_links_by_data(__MODULE__, data, %{}, include, cache_key, viewer)
           else
             []
           end
@@ -261,17 +238,19 @@ defmodule Carve.View do
       end
 
       # Internal index implementation
-      defp do_index(%{result: data, include: include} = assigns, cache_key) when is_list(data) do
-        cached_by_id = Carve.Batch.warm(__MODULE__, data, cache_key)
+      defp do_index(%{result: data} = assigns, cache_key) when is_list(data) do
+        viewer = Carve.View.viewer(assigns)
+        include = Map.get(assigns, :include)
+        cached_by_id = Carve.Batch.warm(__MODULE__, data, cache_key, viewer)
 
         results =
           Enum.map(data, fn item ->
-            prepare_for_view(item, Map.get(cached_by_id, item.id))
+            result_for_viewer(item, Map.get(cached_by_id, item.id), viewer)
           end)
 
         links =
           if unquote(has_declare_links) do
-            Carve.Links.get_links_by_data(__MODULE__, data, %{}, include, cache_key)
+            Carve.Links.get_links_by_data(__MODULE__, data, %{}, include, cache_key, viewer)
           else
             []
           end
@@ -279,22 +258,18 @@ defmodule Carve.View do
         carve_count(%{result: results, links: links}, assigns)
       end
 
-      defp do_index(%{result: data} = assigns, cache_key) when is_list(data) do
-        cached_by_id = Carve.Batch.warm(__MODULE__, data, cache_key)
+      # A controller's own result must render: a nil here means the controller
+      # authorized a row its view refuses, which is a bug, not an empty response.
+      defp result_for_viewer(data, cached, viewer) do
+        case prepare_for_view(data, cached, viewer) do
+          nil ->
+            raise ArgumentError,
+                  "#{inspect(__MODULE__)} rendered nil for #{inspect(Carve.Batch.entity_id(data))}: " <>
+                    "the view refuses this viewer, but the controller rendered it as a result"
 
-        results =
-          Enum.map(data, fn item ->
-            prepare_for_view(item, Map.get(cached_by_id, item.id))
-          end)
-
-        links =
-          if unquote(has_declare_links) do
-            Carve.Links.get_links_by_data(__MODULE__, data, %{}, nil, cache_key)
-          else
-            []
-          end
-
-        carve_count(%{result: results, links: links}, assigns)
+          result ->
+            result
+        end
       end
 
       # A listing may carry how many rows it matches in all (the `count`
@@ -336,18 +311,30 @@ defmodule Carve.View do
       def type_name, do: @carve_type
 
       unquote(cache_fallback)
-      unquote(view_fallback)
-      unquote(links_fallback)
       unquote(declare_links_default)
+
+      # Narrower forms, for callers that render an entity by hand: no viewer
+      # means an anonymous render.
+      def __cache__(data), do: __cache__(data, nil)
+      def declare_links(data), do: declare_links(data, __cache__(data, nil), nil)
+      def declare_links(data, cached), do: declare_links(data, cached, nil)
+      def prepare_for_view(data), do: prepare_for_view(data, __cache__(data, nil), nil)
+      def prepare_for_view(data, cached), do: prepare_for_view(data, cached, nil)
     end
   end
+
+  @doc false
+  # The viewer of a render: the assign under the configured key, nil when absent.
+  def viewer(assigns) when is_map(assigns), do: Map.get(assigns, Carve.Config.viewer_key())
+  def viewer(_assigns), do: nil
 
   @doc """
   Caches expensive computations that are shared between `links` and `view`.
 
-  The function receives the entity data and should return a map of precomputed values.
-  This map is then passed as the second argument to `links` and `view` functions.
-  Results are cached per entity (by module + id) within a single request.
+  The function receives the entity data (and the viewer, when it takes two
+  arguments) and should return a map of precomputed values. This map is then
+  passed as the second argument to `links` and `view` functions. Results are
+  cached per entity (by module + id) within a single request.
 
   ## Example
 
@@ -367,10 +354,16 @@ defmodule Carve.View do
       end
   """
   defmacro cache(func) do
-    quote do
-      def __cache__(data) do
-        unquote(func).(data)
-      end
+    case detect_fn_arity(func) do
+      2 ->
+        quote do
+          def __cache__(data, viewer), do: unquote(func).(data, viewer)
+        end
+
+      _ ->
+        quote do
+          def __cache__(data, _viewer), do: unquote(func).(data)
+        end
     end
   end
 
@@ -379,12 +372,12 @@ defmodule Carve.View do
   render in one call instead of once per entity, so a query inside it runs
   once per render instead of once per row.
 
-  The function receives the list of entities about to be rendered and must
-  return a map keyed by entity id. Each entity's value is passed to `links`
-  and `view` as their second argument, exactly like `cache`. Ids missing
-  from the returned map are cached as nil, and the view handles absence per
-  entity. Defining both `cache` and `cache_many` in one view is a
-  compile-time error.
+  The function receives the list of entities about to be rendered (and the
+  viewer, when it takes two arguments) and must return a map keyed by entity
+  id. Each entity's value is passed to `links` and `view` as their second
+  argument, exactly like `cache`. Ids missing from the returned map are
+  cached as nil, and the view handles absence per entity. Defining both
+  `cache` and `cache_many` in one view is a compile-time error.
 
   ## Example
 
@@ -398,10 +391,18 @@ defmodule Carve.View do
       end
   """
   defmacro cache_many(func) do
-    quote do
-      def __cache_many__(entities) when is_list(entities) do
-        unquote(func).(entities)
-      end
+    case detect_fn_arity(func) do
+      2 ->
+        quote do
+          def __cache_many__(entities, viewer) when is_list(entities),
+            do: unquote(func).(entities, viewer)
+        end
+
+      _ ->
+        quote do
+          def __cache_many__(entities, _viewer) when is_list(entities),
+            do: unquote(func).(entities)
+        end
     end
   end
 
@@ -409,12 +410,13 @@ defmodule Carve.View do
   Defines the links for the current view.
 
   This macro allows you to specify how to generate links for the current entity.
-  Accepts a 1-arity function, or a 2-arity function when used with `cache`.
+  Accepts a 1-arity function, a 2-arity function when used with `cache`, or a
+  3-arity function that also receives the viewer.
 
   ## Parameters
 
-  - `func`: A function that takes the entity data (and optionally cached data)
-    and returns a map of links.
+  - `func`: A function that takes the entity data (and optionally cached data
+    and the viewer) and returns a map of links.
 
   ## Example
 
@@ -427,18 +429,19 @@ defmodule Carve.View do
   """
   defmacro links(func) do
     case detect_fn_arity(func) do
+      3 ->
+        quote do
+          def declare_links(data, cached, viewer), do: unquote(func).(data, cached, viewer)
+        end
+
       2 ->
         quote do
-          def declare_links(data, cached) do
-            unquote(func).(data, cached)
-          end
+          def declare_links(data, cached, _viewer), do: unquote(func).(data, cached)
         end
 
       _ ->
         quote do
-          def declare_links(data) do
-            unquote(func).(data)
-          end
+          def declare_links(data, _cached, _viewer), do: unquote(func).(data)
         end
     end
   end
@@ -447,17 +450,22 @@ defmodule Carve.View do
   Defines how to render the view for the current entity.
 
   This macro specifies how to format the entity data for JSON output.
-  Accepts a 1-arity function, or a 2-arity function when used with `cache`.
+  Accepts a 1-arity function, a 2-arity function when used with `cache`, or a
+  3-arity function that also receives the viewer.
 
   The `id` returned by the function is also used as the entity's envelope id,
   so a view can expose a custom identifier (e.g. a slug) instead of the
   hashed id. When the function returns no `id`, the envelope falls back to
   `hash(data.id)`.
 
+  Returning `nil` means the entity is not shown to this viewer: it is left
+  out of the links (and its own links are not walked), and raises when it is
+  a controller's own result.
+
   ## Parameters
 
-  - `func`: A function that takes the entity data (and optionally cached data)
-    and returns a map for JSON rendering.
+  - `func`: A function that takes the entity data (and optionally cached data
+    and the viewer) and returns a map for JSON rendering, or nil.
 
   ## Example
 
@@ -470,32 +478,22 @@ defmodule Carve.View do
       end
   """
   defmacro view(func) do
-    case detect_fn_arity(func) do
-      2 ->
-        quote do
-          def prepare_for_view(data, cached) do
-            view = unquote(func).(data, cached)
+    body =
+      case detect_fn_arity(func) do
+        3 -> quote do: unquote(func).(data, cached, viewer)
+        2 -> quote do: unquote(func).(data, cached)
+        _ -> quote do: unquote(func).(data)
+      end
 
-            %{
-              id: Map.get(view, :id) || hash(data.id),
-              type: type_name(),
-              data: view
-            }
-          end
+    quote do
+      def prepare_for_view(data, cached, viewer) do
+        _ = {cached, viewer}
+
+        case unquote(body) do
+          nil -> nil
+          view -> %{id: Map.get(view, :id) || hash(data.id), type: type_name(), data: view}
         end
-
-      _ ->
-        quote do
-          def prepare_for_view(data) do
-            view = unquote(func).(data)
-
-            %{
-              id: Map.get(view, :id) || hash(data.id),
-              type: type_name(),
-              data: view
-            }
-          end
-        end
+      end
     end
   end
 
