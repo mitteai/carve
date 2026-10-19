@@ -90,19 +90,19 @@ defmodule Carve do
       [%{type: :user, id: "abc123", data: %{...}}, %{type: :comment, id: "def456", data: %{...}}]
 
   """
-  def links(module, data_or_ids) do
+  def links(module, data_or_ids, viewer \\ nil) do
     cond do
       is_integer(data_or_ids) ->
-        Carve.Links.get_links_by_id(module, data_or_ids)
+        Carve.Links.get_links_by_id(module, data_or_ids, %{}, nil, nil, viewer)
 
       is_list(data_or_ids) and Enum.all?(data_or_ids, &is_integer/1) ->
-        Carve.Links.get_links_by_id(module, data_or_ids)
+        Carve.Links.get_links_by_id(module, data_or_ids, %{}, nil, nil, viewer)
 
       is_map(data_or_ids) ->
-        Carve.Links.get_links_by_data(module, data_or_ids)
+        Carve.Links.get_links_by_data(module, data_or_ids, %{}, nil, nil, viewer)
 
       is_list(data_or_ids) and Enum.all?(data_or_ids, &is_map/1) ->
-        Carve.Links.get_links_by_data(module, data_or_ids)
+        Carve.Links.get_links_by_data(module, data_or_ids, %{}, nil, nil, viewer)
 
       true ->
         []

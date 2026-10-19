@@ -32,4 +32,11 @@ defmodule Carve.Config do
   def cache_ttl do
     get(:cache_ttl, 500)
   end
+
+  @doc """
+  The assign a render reads its viewer from. Defaults to `:viewer`.
+  """
+  def viewer_key do
+    get(:viewer, :viewer)
+  end
 end

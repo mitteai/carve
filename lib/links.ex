@@ -1,35 +1,54 @@
 defmodule Carve.Links do
   # Public API — returns lists (backward compatible)
 
-  def get_links_by_id(module, id, visited \\ %{}, whitelist \\ nil, cache_key \\ nil) do
-    {links, _visited} = do_get_links_by_id(module, id, visited, whitelist, cache_key)
+  def get_links_by_id(
+        module,
+        id,
+        visited \\ %{},
+        whitelist \\ nil,
+        cache_key \\ nil,
+        viewer \\ nil
+      ) do
+    {links, _visited} = do_get_links_by_id(module, id, visited, whitelist, cache_key, viewer)
     links
   end
 
-  def get_links_by_data(module, data, visited \\ %{}, whitelist \\ nil, cache_key \\ nil) do
-    {links, _visited} = do_get_links_by_data(module, data, visited, whitelist, cache_key)
+  def get_links_by_data(
+        module,
+        data,
+        visited \\ %{},
+        whitelist \\ nil,
+        cache_key \\ nil,
+        viewer \\ nil
+      ) do
+    {links, _visited} = do_get_links_by_data(module, data, visited, whitelist, cache_key, viewer)
     links
   end
 
   # Internal API — returns {links, visited} to accumulate visited across items
 
-  defp do_get_links_by_id(_module, nil, visited, _whitelist, _cache_key), do: {[], visited}
+  defp do_get_links_by_id(_module, nil, visited, _whitelist, _cache_key, _viewer),
+    do: {[], visited}
 
-  defp do_get_links_by_id(module, id, visited, whitelist, cache_key) when not is_list(id) do
+  defp do_get_links_by_id(module, id, visited, whitelist, cache_key, viewer)
+       when not is_list(id) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
     case Map.get(visited, {module, id}) do
       nil ->
-        data = Carve.Cache.fetch(cache_key, {module, :get, id}, fn ->
-          module.get_by_id(id)
-        end)
+        data =
+          Carve.Cache.fetch(cache_key, {module, :get, id}, fn ->
+            module.get_by_id(id)
+          end)
 
         case data do
           nil ->
             {[], visited}
 
           data ->
-            {links, visited} = do_get_links_by_data(module, data, visited, whitelist, cache_key)
+            {links, visited} =
+              do_get_links_by_data(module, data, visited, whitelist, cache_key, viewer)
+
             {prepare_result(links, whitelist), visited}
         end
 
@@ -38,40 +57,41 @@ defmodule Carve.Links do
     end
   end
 
-  defp do_get_links_by_id(module, ids, visited, whitelist, cache_key) when is_list(ids) do
+  defp do_get_links_by_id(module, ids, visited, whitelist, cache_key, viewer) when is_list(ids) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
     {links, visited} =
       Enum.reduce(ids, {[], visited}, fn id, {acc, vis} ->
-        {new_links, vis} = do_get_links_by_id(module, id, vis, whitelist, cache_key)
+        {new_links, vis} = do_get_links_by_id(module, id, vis, whitelist, cache_key, viewer)
         {acc ++ new_links, vis}
       end)
 
     {prepare_result(links, whitelist), visited}
   end
 
-  defp do_get_links_by_data(_module, nil, visited, _whitelist, _cache_key), do: {[], visited}
+  defp do_get_links_by_data(_module, nil, visited, _whitelist, _cache_key, _viewer),
+    do: {[], visited}
 
-  defp do_get_links_by_data(module, data_list, visited, whitelist, cache_key)
+  defp do_get_links_by_data(module, data_list, visited, whitelist, cache_key, viewer)
        when is_list(data_list) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
-    warm_level(module, data_list, visited, whitelist, cache_key)
+    warm_level(module, data_list, visited, whitelist, cache_key, viewer)
 
     {links, visited} =
       Enum.reduce(data_list, {[], visited}, fn item, {acc, vis} ->
-        {new_links, vis} = do_get_links_by_data(module, item, vis, whitelist, cache_key)
+        {new_links, vis} = do_get_links_by_data(module, item, vis, whitelist, cache_key, viewer)
         {acc ++ new_links, vis}
       end)
 
     {prepare_result(links, whitelist), visited}
   end
 
-  defp do_get_links_by_data(_module, data, visited, _whitelist, _cache_key)
+  defp do_get_links_by_data(_module, data, visited, _whitelist, _cache_key, _viewer)
        when not is_map(data),
        do: {[], visited}
 
-  defp do_get_links_by_data(module, data, visited, whitelist, cache_key)
+  defp do_get_links_by_data(module, data, visited, whitelist, cache_key, viewer)
        when not is_list(data) do
     cache_key = cache_key || Carve.Cache.get_or_create_context()
 
@@ -82,11 +102,11 @@ defmodule Carve.Links do
         else
           visited = Map.put(visited, {module, id}, true)
 
-          cached = fetch_cached(module, data, id, cache_key)
+          cached = fetch_cached(module, data, id, cache_key, viewer)
 
-          raw_links = fetch_links(module, data, id, cached, cache_key)
+          raw_links = fetch_links(module, data, id, cached, cache_key, viewer)
 
-          warm_link_targets([raw_links], visited, whitelist, cache_key)
+          warm_link_targets([raw_links], visited, whitelist, cache_key, viewer)
 
           links = filter_and_evaluate_links(raw_links, whitelist)
 
@@ -95,17 +115,37 @@ defmodule Carve.Links do
               link_data_or_ids
               |> normalize_link_ids()
               |> Enum.reduce({acc, vis}, fn link_id_or_data, {acc, vis} ->
-                link = process_single_link(link_module, link_id_or_data, vis, cache_key)
+                # nil: missing, already rendered, or not for this viewer;
+                # nothing to add and nothing to walk below it
+                case process_single_link(link_module, link_id_or_data, vis, cache_key, viewer) do
+                  nil ->
+                    {acc, vis}
 
-                # let do_get_links_by_id/data mark visited internally
-                {children, vis} =
-                  if is_map(link_id_or_data) do
-                    do_get_links_by_data(link_module, link_id_or_data, vis, whitelist, cache_key)
-                  else
-                    do_get_links_by_id(link_module, link_id_or_data, vis, whitelist, cache_key)
-                  end
+                  link ->
+                    # let do_get_links_by_id/data mark visited internally
+                    {children, vis} =
+                      if is_map(link_id_or_data) do
+                        do_get_links_by_data(
+                          link_module,
+                          link_id_or_data,
+                          vis,
+                          whitelist,
+                          cache_key,
+                          viewer
+                        )
+                      else
+                        do_get_links_by_id(
+                          link_module,
+                          link_id_or_data,
+                          vis,
+                          whitelist,
+                          cache_key,
+                          viewer
+                        )
+                      end
 
-                {acc ++ [link | children], vis}
+                    {acc ++ [link | children], vis}
+                end
               end)
             end)
 
@@ -118,9 +158,9 @@ defmodule Carve.Links do
   end
 
   # Fetch cached data for a module, using the Cachex cache
-  defp fetch_cached(module, data, id, cache_key) do
+  defp fetch_cached(module, data, id, cache_key, viewer) do
     Carve.Cache.fetch(cache_key, {module, :cache, id}, fn ->
-      module.__cache__(data)
+      module.__cache__(data, viewer)
     end)
   end
 
@@ -128,20 +168,20 @@ defmodule Carve.Links do
 
   # Memoized declare_links, so the warm-up pre-pass and the traversal
   # evaluate each entity's links function once per request.
-  defp fetch_links(module, data, id, cached, cache_key) do
+  defp fetch_links(module, data, id, cached, cache_key, viewer) do
     Carve.Cache.fetch(cache_key, {module, :links, id}, fn ->
-      module.declare_links(data, cached)
+      module.declare_links(data, cached, viewer)
     end)
   end
 
   # Cross-item warm-up for a list render: batch the list's own cache, then
   # batch the cache of every linked entity set whose view defines
   # cache_many, so the per-item traversal below hits the cache throughout.
-  # Skipped when caching is disabled (nil cache_key) — the traversal stays
+  # Skipped when caching is disabled (nil cache_key, viewer) — the traversal stays
   # correct through the per-entity batch-of-one __cache__ fallback.
-  defp warm_level(_module, _data_list, _visited, _whitelist, nil), do: :ok
+  defp warm_level(_module, _data_list, _visited, _whitelist, nil, _viewer), do: :ok
 
-  defp warm_level(module, data_list, visited, whitelist, cache_key) do
+  defp warm_level(module, data_list, visited, whitelist, cache_key, viewer) do
     items =
       Enum.filter(data_list, fn item ->
         with true <- is_map(item),
@@ -152,23 +192,23 @@ defmodule Carve.Links do
         end
       end)
 
-    cached_by_id = Carve.Batch.warm(module, items, cache_key)
+    cached_by_id = Carve.Batch.warm(module, items, cache_key, viewer)
 
     raw_links_list =
       Enum.map(items, fn item ->
         {:ok, id} = fetch_id(item)
-        fetch_links(module, item, id, Map.get(cached_by_id, id), cache_key)
+        fetch_links(module, item, id, Map.get(cached_by_id, id), cache_key, viewer)
       end)
 
-    warm_link_targets(raw_links_list, visited, whitelist, cache_key)
+    warm_link_targets(raw_links_list, visited, whitelist, cache_key, viewer)
   end
 
   # Warm the cache of link targets, grouped by view module, one batch per
   # module that defines cache_many. Lazy (function) links are left to the
   # traversal so they are never evaluated twice.
-  defp warm_link_targets(_raw_links_list, _visited, _whitelist, nil), do: :ok
+  defp warm_link_targets(_raw_links_list, _visited, _whitelist, nil, _viewer), do: :ok
 
-  defp warm_link_targets(raw_links_list, visited, whitelist, cache_key) do
+  defp warm_link_targets(raw_links_list, visited, whitelist, cache_key, viewer) do
     raw_links_list
     |> Enum.flat_map(fn raw_links ->
       for {link_module, value} <- raw_links,
@@ -199,7 +239,7 @@ defmodule Carve.Links do
         end)
         |> Enum.reject(&is_nil/1)
 
-      Carve.Batch.warm(link_module, entities, cache_key)
+      Carve.Batch.warm(link_module, entities, cache_key, viewer)
     end)
   end
 
@@ -209,18 +249,22 @@ defmodule Carve.Links do
   defp link_whitelisted?(module, whitelist) when is_list(whitelist),
     do: module.type_name() in whitelist
 
-  defp process_single_link(module, id, visited, cache_key) when is_number(id) or is_binary(id) do
+  defp process_single_link(module, id, visited, cache_key, viewer)
+       when is_number(id) or is_binary(id) do
     case Map.get(visited, {module, id}) do
       nil ->
-        data = Carve.Cache.fetch(cache_key, {module, :get, id}, fn ->
-          module.get_by_id(id)
-        end)
+        data =
+          Carve.Cache.fetch(cache_key, {module, :get, id}, fn ->
+            module.get_by_id(id)
+          end)
 
         case data do
-          nil -> nil
+          nil ->
+            nil
+
           data ->
-            cached = fetch_cached(module, data, id, cache_key)
-            module.prepare_for_view(data, cached)
+            cached = fetch_cached(module, data, id, cache_key, viewer)
+            module.prepare_for_view(data, cached, viewer)
         end
 
       _ ->
@@ -228,13 +272,13 @@ defmodule Carve.Links do
     end
   end
 
-  defp process_single_link(module, data, visited, cache_key) do
+  defp process_single_link(module, data, visited, cache_key, viewer) do
     case fetch_id(data) do
       {:ok, id} ->
         case Map.get(visited, {module, id}) do
           nil ->
-            cached = fetch_cached(module, data, id, cache_key)
-            module.prepare_for_view(data, cached)
+            cached = fetch_cached(module, data, id, cache_key, viewer)
+            module.prepare_for_view(data, cached, viewer)
 
           _ ->
             nil
@@ -298,8 +342,12 @@ defmodule Carve.Links do
 
   defp fetch_id(data) when is_map(data) do
     cond do
-      Map.has_key?(data, :id) -> {:ok, data.id}
-      Map.has_key?(data, "id") -> {:ok, data["id"]}
+      Map.has_key?(data, :id) ->
+        {:ok, data.id}
+
+      Map.has_key?(data, "id") ->
+        {:ok, data["id"]}
+
       true ->
         case Enum.at(data, 0) do
           {key, value} -> {:ok, {key, value}}
