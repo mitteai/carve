@@ -166,7 +166,9 @@ defmodule Carve.ViewerTest do
   end
 
   test "the viewer key is configurable" do
-    Application.put_env(:carve, Carve.Config, viewer: :current_user)
+    original = Application.get_env(:carve, Carve.Config, [])
+    Application.put_env(:carve, Carve.Config, Keyword.put(original, :viewer, :current_user))
+    on_exit(fn -> Application.put_env(:carve, Carve.Config, original) end)
 
     body =
       UserJSON.show(%{
@@ -175,8 +177,28 @@ defmodule Carve.ViewerTest do
       })
 
     assert body.result.data.owner == true
-  after
-    Application.delete_env(:carve, Carve.Config)
+  end
+
+  test "Carve.links/3 calls in one process never share a viewer's cache" do
+    user = %{id: 1, name: "User 1", email: "u1@x", team: 1}
+
+    owner_links = Carve.links(UserJSON, user, %{id: 1, team: 1})
+    stranger_links = Carve.links(UserJSON, user, %{id: 9, team: 9})
+
+    assert Enum.map(owner_links, & &1.type) == [:plan, :note]
+    assert stranger_links == []
+    assert Process.get(:carve_cache_key) == nil
+  end
+
+  test "a refused link shared by many parents is decided once" do
+    stranger = %{id: 9, team: 9}
+    posts = for id <- 1..3, do: %{id: id, author_id: 1}
+    body = PostJSON.index(%{result: posts, viewer: stranger})
+
+    # the one author renders once, public; nothing behind the owner branch is fetched
+    assert data(body, :user) == [%{id: UserJSON.hash(1), name: "User 1"}]
+    assert Log.all(:cache_many) == [{[1], stranger}]
+    assert Log.all(:note_get) == []
   end
 
   test "a view that does not ask for the viewer renders as before" do

@@ -3,7 +3,7 @@ defmodule Carve.Batch do
   Batched cache warm-up for views that define `cache_many`.
 
   `warm/3` resolves the cached value for a set of entities of one view in a
-  single `__cache_many__/2` call, instead of one `__cache__/1` call per
+  single `__cache_many__/2` call, instead of one `__cache__/2` call per
   entity. Views without `cache_many` fall back to the per-entity path,
   preserving the existing `cache` behavior exactly.
   """

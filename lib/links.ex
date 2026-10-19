@@ -9,8 +9,10 @@ defmodule Carve.Links do
         cache_key \\ nil,
         viewer \\ nil
       ) do
-    {links, _visited} = do_get_links_by_id(module, id, visited, whitelist, cache_key, viewer)
-    links
+    with_context(cache_key, fn cache_key ->
+      {links, _visited} = do_get_links_by_id(module, id, visited, whitelist, cache_key, viewer)
+      links
+    end)
   end
 
   def get_links_by_data(
@@ -21,9 +23,29 @@ defmodule Carve.Links do
         cache_key \\ nil,
         viewer \\ nil
       ) do
-    {links, _visited} = do_get_links_by_data(module, data, visited, whitelist, cache_key, viewer)
-    links
+    with_context(cache_key, fn cache_key ->
+      {links, _visited} =
+        do_get_links_by_data(module, data, visited, whitelist, cache_key, viewer)
+
+      links
+    end)
   end
+
+  # A render owns its cache context (show/index create and clear it). A call
+  # with no context gets one of its own and clears it after, so nothing
+  # cached for one viewer is read by the next call in the same process.
+  defp with_context(nil, fun) do
+    owned? = Process.get(:carve_cache_key) == nil
+    cache_key = Carve.Cache.get_or_create_context()
+
+    try do
+      fun.(cache_key)
+    after
+      if owned?, do: Carve.Cache.clear_context()
+    end
+  end
+
+  defp with_context(cache_key, fun), do: fun.(cache_key)
 
   # Internal API — returns {links, visited} to accumulate visited across items
 
@@ -119,7 +141,7 @@ defmodule Carve.Links do
                 # nothing to add and nothing to walk below it
                 case process_single_link(link_module, link_id_or_data, vis, cache_key, viewer) do
                   nil ->
-                    {acc, vis}
+                    {acc, mark_visited(vis, link_module, link_id_or_data)}
 
                   link ->
                     # let do_get_links_by_id/data mark visited internally
@@ -177,7 +199,7 @@ defmodule Carve.Links do
   # Cross-item warm-up for a list render: batch the list's own cache, then
   # batch the cache of every linked entity set whose view defines
   # cache_many, so the per-item traversal below hits the cache throughout.
-  # Skipped when caching is disabled (nil cache_key, viewer) — the traversal stays
+  # Skipped when caching is disabled (nil cache_key) — the traversal stays
   # correct through the per-entity batch-of-one __cache__ fallback.
   defp warm_level(_module, _data_list, _visited, _whitelist, nil, _viewer), do: :ok
 
@@ -325,6 +347,15 @@ defmodule Carve.Links do
 
   defp filter_result(result, whitelist) do
     Enum.filter(result, fn %{type: type} -> type in whitelist end)
+  end
+
+  # A refused or missing target is settled for the render: the next parent
+  # that links it neither renders nor walks it again
+  defp mark_visited(visited, module, target) do
+    case extract_id(target) do
+      nil -> visited
+      id -> Map.put(visited, {module, id}, true)
+    end
   end
 
   defp extract_id(nil), do: nil
